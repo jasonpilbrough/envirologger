@@ -10,6 +10,7 @@ Date: 24/09/19
 import RPi.GPIO as GPIO
 import time
 import spidev
+import smbus
 
 #GLOBAL VARIABLES
 
@@ -18,6 +19,14 @@ global BUTTON1; BUTTON1 = 31
 global BUTTON2; BUTTON2 = 33
 global BUTTON3; BUTTON3 = 35
 global BUTTON4; BUTTON4 = 37
+
+#I2C
+global I2C_BUS; I2C_BUS = 1 # 1 indicates /dev/i2c-1  
+global RTC_ADDRESS; RTC_ADDRESS = 0x6f
+global RTC;
+global RTC_SEC; RTC_SEC = 0x0 #address of seconds register on RTC
+global RTC_MIN; RTC_MIN = 0x1 #address of minutes register on RTC
+global RTC_HOUR; RTC_HOUR = 0x2 #address of hours register on RTC
 
 #SPI
 global SPI_BUS; SPI_BUS = 0 # 0 or 1
@@ -34,7 +43,7 @@ global VREF; VREF = 3.3 #reference voltage: 3.3V
 def config():
     GPIO.setmode(GPIO.BOARD)
     #CONFIG OUTPUT PINS
-    #GPIO.setup(CHANNEL_LED1, GPIO.OUT, initial=GPIO.LOW)
+    
     #CONFIG INPUT PINS
     GPIO.setup(BUTTON1, GPIO.IN, pull_up_down=GPIO.PUD_DOWN) #config with pull down resistor
     GPIO.add_event_detect(BUTTON1, GPIO.RISING, callback=startStopMonitoring, bouncetime=200)  # add rising edge detection with debouncing on a channel
@@ -48,6 +57,9 @@ def config():
     GPIO.setup(BUTTON4, GPIO.IN, pull_up_down=GPIO.PUD_DOWN) # config with pull down resistor                                                                                                             
     GPIO.add_event_detect(BUTTON4, GPIO.RISING, callback=changeReadInteval, bouncetime=200)  # add rising edge detection with debouncing on a channel 
 
+    #CONFIG I2C FOR RTC
+    global RTC; RTC = smbus.SMBus(I2C_BUS)
+    RTC.write_byte_data(RTC_ADDRESS, RTC_SEC, 0b10000000) # enable oscillator in SEC register
 
 def readADC(channel):
     spi = spidev.SpiDev() #Enable SPI                                                                                                        
@@ -67,6 +79,16 @@ def readADC(channel):
     spi.close() #close connection
     return voltage
 
+def readTime():
+    sec = RTC.read_byte_data(RTC_ADDRESS, RTC_SEC) - 128 #first bit is oscilator bit, must remove to get seconds value
+    minute = RTC.read_byte_data(RTC_ADDRESS, RTC_MIN)
+    hour = RTC.read_byte_data(RTC_ADDRESS, RTC_HOUR)
+    return f"{hour:02}:{minute:02}:{sec:02}"
+
+def displayInfo(time, humidity, light):
+    print(f"RTC time: {time}, Humidity: {humidity}, Light: {light}")
+    
+
 def startStopMonitoring(pos):
     print("startStopMonitoring")
 
@@ -82,7 +104,9 @@ def changeReadInteval(pos):
 def main():
     humidityReading = readADC(0);
     lightReading = readADC(1);
-    print("Humidity: ",humidityReading,"Light: ",lightReading)
+    timeReading = readTime();
+    displayInfo(timeReading, humidityReading, lightReading);
+    #print("Humidity: ",humidityReading,"Light: ",lightReading)
     time.sleep(1)
     
 # Only run the functions if 
