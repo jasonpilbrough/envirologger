@@ -20,6 +20,14 @@ global BUTTON2; BUTTON2 = 33
 global BUTTON3; BUTTON3 = 35
 global BUTTON4; BUTTON4 = 37
 
+#PWM
+global PWM
+global PWM_OUT; PWM_OUT = 32 #pin used for PWM
+global PWM_FREQ; PWM_FREQ = 1 #frequency of LED flash
+
+#ALARM
+global ALARM_TRIGGERED; ALARM_TRIGGERED = False # indicates whether an alarm has been triggered
+
 #I2C
 global I2C_BUS; I2C_BUS = 1 # 1 indicates /dev/i2c-1  
 global RTC_ADDRESS; RTC_ADDRESS = 0x6f
@@ -35,7 +43,7 @@ global SPI_MODE; SPI_MODE = 0
 global SPI_MAX_SPEED; SPI_MAX_SPEED=488000
 
 #ADC
-global RESOLUTION; RESOLUTION = 10 #10 bit ADC
+global RESOLUTION; ADC_RESOLUTION = 10 #10 bit ADC
 global VREF; VREF = 3.3 #reference voltage: 3.3V
 
 # TIMING
@@ -45,7 +53,10 @@ global IS_MONITORING; IS_MONITORING = True # -> updated by startStopMonitoring()
 #CONFIG GPIO PINS (ONLY RUNS ONCE)
 def config():
     GPIO.setmode(GPIO.BOARD)
-    #CONFIG OUTPUT PINS
+    
+    #CONFIG OUTPUT PINS AND PWM
+    GPIO.setup(PWM_OUT, GPIO.OUT) #setup PWM output pin
+    global PWM; PWM = GPIO.PWM(PWM_OUT, PWM_FREQ)
     
     #CONFIG INPUT PINS
     GPIO.setup(BUTTON1, GPIO.IN, pull_up_down=GPIO.PUD_DOWN) #config with pull down resistor
@@ -58,7 +69,7 @@ def config():
     GPIO.add_event_detect(BUTTON3, GPIO.RISING, callback=resetSysTime, bouncetime=200)  # add rising edge detection with debouncing on a channel 
 
     GPIO.setup(BUTTON4, GPIO.IN, pull_up_down=GPIO.PUD_DOWN) # config with pull down resistor                                                                                                             
-    GPIO.add_event_detect(BUTTON4, GPIO.RISING, callback=changeReadInteval, bouncetime=200)  # add rising edge detection with debouncing on a channel 
+    GPIO.add_event_detect(BUTTON4, GPIO.RISING, callback=changeReadInteval, bouncetime=200)  # add rising edge detection with debouncing on a channel
 
     #CONFIG I2C FOR RTC
     global RTC; RTC = smbus.SMBus(I2C_BUS)
@@ -80,14 +91,28 @@ def readADC(channel):
     spi.close() #close connection
     return adc
 
-def readTime():
+def readRTC():
     sec = RTC.read_byte_data(RTC_ADDRESS, RTC_SEC) - 128 #first bit is oscilator bit, must remove to get seconds value
     minute = RTC.read_byte_data(RTC_ADDRESS, RTC_MIN)
     hour = RTC.read_byte_data(RTC_ADDRESS, RTC_HOUR)
     return f"{hour:02}:{minute:02}:{sec:02}"
 
-def displayInfo(time, humidity, light):
-    print(f"RTC time: {time} Humidity: {humidity}V Light: {light}")
+    
+def triggerAlarm():
+    global PWM; global ALARM_TRIGGERED
+    if(ALARM_TRIGGERED):
+        return
+
+    PWM.ChangeFrequency(PWM_FREQ) #Bug in PWM that require freq to be reset on pwm restart (Do not remove)
+    PWM.start(50)
+    ALARM_TRIGGERED = True
+
+def displayInfo(time, humidity, light, DACout):
+    global ALARM_TRIGGERED;
+    alarmStr = ""
+    if(ALARM_TRIGGERED):
+        alarmStr = "(*)"
+    print(f"{time:10} {humidity:8}V {light:8} {DACout:8}V {alarmStr:5}")
     
 
 def startStopMonitoring(pos):
@@ -95,7 +120,9 @@ def startStopMonitoring(pos):
     IS_MONITORING = not(IS_MONITORING)
 
 def dismissAlarm(pos):
-    print("dismissAlarm")
+    global ALARM_TRIGGERED
+    PWM.stop()
+    ALARM_TRIGGERED = False
 
 def resetSysTime(pos):
     RTC.write_byte_data(RTC_ADDRESS, RTC_SEC, 0b10000000)
@@ -117,10 +144,13 @@ def main():
     global IS_MONITORING
     if(IS_MONITORING): #only read values if currently monitoring
         humidityReading = readADC(0);
-        humidityVoltage = round(humidityReading*VREF/(2**RESOLUTION),3); #convert humidity reading to voltage 
+        humidityVoltage = round(humidityReading*VREF/(2**ADC_RESOLUTION),3); #convert humidity reading to voltage 
         lightReading = readADC(1);
-        timeReading = readTime();
-        displayInfo(timeReading, humidityVoltage, lightReading);
+        timeReading = readRTC();
+        DACout = round((lightReading/(2**ADC_RESOLUTION)) *  humidityVoltage,3)
+        if(DACout<0.65 or DACout>2.65):
+            triggerAlarm()
+        displayInfo(timeReading, humidityVoltage, lightReading, DACout);
         
     time.sleep(READ_INTERVAL)
 
@@ -130,6 +160,7 @@ if __name__ == "__main__":
     # Make sure the GPIO is stopped correctly
     try:
         config()
+        print(f"{'RTC time':<10} {'Humidity':>8} {'Light':>8} {'DAC out':>8} {'Alarm':>5}")
         while True:
             main()
     except KeyboardInterrupt:
