@@ -38,6 +38,9 @@ global SPI_MAX_SPEED; SPI_MAX_SPEED=488000
 global RESOLUTION; RESOLUTION = 10 #10 bit ADC
 global VREF; VREF = 3.3 #reference voltage: 3.3V
 
+# TIMING
+global READ_INTERVAL; READ_INTERVAL = 1 # can be 1s, 2s or 5s -> updated by changeReadInterval()
+global IS_MONITORING; IS_MONITORING = True # -> updated by startStopMonitoring() 
 
 #CONFIG GPIO PINS (ONLY RUNS ONCE)
 def config():
@@ -59,8 +62,9 @@ def config():
 
     #CONFIG I2C FOR RTC
     global RTC; RTC = smbus.SMBus(I2C_BUS)
-    RTC.write_byte_data(RTC_ADDRESS, RTC_SEC, 0b10000000) # enable oscillator in SEC register
+    RTC.write_byte_data(RTC_ADDRESS, RTC_SEC, 0b10000000) # enable ST (start oscillator) bit
 
+    
 def readADC(channel):
     spi = spidev.SpiDev() #Enable SPI                                                                                                        
     spi.open(SPI_BUS, SPI_DEVICE) #Open connection to a specific bus and device (CS pin)                                                                                                                  
@@ -72,12 +76,9 @@ def readADC(channel):
     adc = 0 #build reply int from byte array
     for x in reply:
         adc = (adc << 8) + x
-
-    voltage = round(adc*VREF/(2**RESOLUTION),3);
     
-    #print(round(voltage,2),"V")
     spi.close() #close connection
-    return voltage
+    return adc
 
 def readTime():
     sec = RTC.read_byte_data(RTC_ADDRESS, RTC_SEC) - 128 #first bit is oscilator bit, must remove to get seconds value
@@ -86,28 +87,43 @@ def readTime():
     return f"{hour:02}:{minute:02}:{sec:02}"
 
 def displayInfo(time, humidity, light):
-    print(f"RTC time: {time}, Humidity: {humidity}, Light: {light}")
+    print(f"RTC time: {time} Humidity: {humidity}V Light: {light}")
     
 
 def startStopMonitoring(pos):
-    print("startStopMonitoring")
+    global IS_MONITORING
+    IS_MONITORING = not(IS_MONITORING)
 
 def dismissAlarm(pos):
     print("dismissAlarm")
 
 def resetSysTime(pos):
-    print("restSysTime")
+    RTC.write_byte_data(RTC_ADDRESS, RTC_SEC, 0b10000000)
+    RTC.write_byte_data(RTC_ADDRESS, RTC_MIN, 0b00000000)
+    RTC.write_byte_data(RTC_ADDRESS, RTC_HOUR, 0b00000000)
 
-def changeReadInteval(pos):
-    print("changeReadInteval")
+    
+#TOGGLE READ INTERVAL BETWEEN 1s, 2s, and 5s
+def changeReadInteval(pos): 
+    global READ_INTERVAL
+    if(READ_INTERVAL==1):
+        READ_INTERVAL=2
+    elif(READ_INTERVAL==2):
+        READ_INTERVAL=5
+    elif(READ_INTERVAL==5):
+        READ_INTERVAL=1
 
 def main():
-    humidityReading = readADC(0);
-    lightReading = readADC(1);
-    timeReading = readTime();
-    displayInfo(timeReading, humidityReading, lightReading);
-    #print("Humidity: ",humidityReading,"Light: ",lightReading)
-    time.sleep(1)
+    global IS_MONITORING
+    if(IS_MONITORING): #only read values if currently monitoring
+        humidityReading = readADC(0);
+        humidityVoltage = round(humidityReading*VREF/(2**RESOLUTION),3); #convert humidity reading to voltage 
+        lightReading = readADC(1);
+        timeReading = readTime();
+        displayInfo(timeReading, humidityVoltage, lightReading);
+        
+    time.sleep(READ_INTERVAL)
+
     
 # Only run the functions if 
 if __name__ == "__main__":
