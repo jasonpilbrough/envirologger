@@ -49,22 +49,23 @@ def config():
     GPIO.add_event_detect(BUTTON4, GPIO.RISING, callback=changeReadInteval, bouncetime=200)  # add rising edge detection with debouncing on a channel 
 
 
-def readADC():
+def readADC(channel):
     spi = spidev.SpiDev() #Enable SPI                                                                                                        
     spi.open(SPI_BUS, SPI_DEVICE) #Open connection to a specific bus and device (CS pin)                                                                                                                  
     spi.max_speed_hz = SPI_MAX_SPEED
     spi.mode = SPI_MODE
-    config_bits = [0b1, 0b10000000,0b0] #byte0=1 to start, byte2=selecting ADC channel,  byte3=0 ?
+    config_bits = [0b1, (8+channel)<<4,0b0] #byte0=1 to start, byte2=selecting ADC channel,  byte3=0 ?
     reply = spi.xfer(config_bits)
 
     adc = 0 #build reply int from byte array
     for x in reply:
         adc = (adc << 8) + x
 
-    voltage = adc*VREF/(2**RESOLUTION);
+    voltage = round(adc*VREF/(2**RESOLUTION),3);
     
-    print(round(voltage,2),"V")
-    spi.close() #close connection   
+    #print(round(voltage,2),"V")
+    spi.close() #close connection
+    return voltage
 
 def startStopMonitoring(pos):
     print("startStopMonitoring")
@@ -79,8 +80,10 @@ def changeReadInteval(pos):
     print("changeReadInteval")
 
 def main():
-    readADC()
-    time.sleep(0.2)
+    humidityReading = readADC(0);
+    lightReading = readADC(1);
+    print("Humidity: ",humidityReading,"Light: ",lightReading)
+    time.sleep(1)
     
 # Only run the functions if 
 if __name__ == "__main__":
