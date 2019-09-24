@@ -9,6 +9,7 @@ Date: 24/09/19
 # import Relevant Librares
 import RPi.GPIO as GPIO
 import time
+from datetime import datetime
 import spidev
 import smbus
 
@@ -46,9 +47,19 @@ global SPI_MAX_SPEED; SPI_MAX_SPEED=488000
 global RESOLUTION; ADC_RESOLUTION = 10 #10 bit ADC
 global VREF; VREF = 3.3 #reference voltage: 3.3V
 
-# TIMING
+#TIMING
 global READ_INTERVAL; READ_INTERVAL = 1 # can be 1s, 2s or 5s -> updated by changeReadInterval()
 global IS_MONITORING; IS_MONITORING = True # -> updated by startStopMonitoring() 
+
+
+#TEMPERATURE SENSOR
+global TEMP_0; TEMP_0 = 0.5   #voltage of temperature sensor at 0 degrees celcius
+global TEMP_COEFFICIENT; TEMP_COEFFICIENT = 0.01   #temperature sensor coefficent
+
+#TIME
+global SYS_TIME_REF; SYS_TIME_REF = 0 #time that system time was last reset
+
+
 
 #CONFIG GPIO PINS (ONLY RUNS ONCE)
 def config():
@@ -75,8 +86,12 @@ def config():
     global RTC; RTC = smbus.SMBus(I2C_BUS)
     RTC.write_byte_data(RTC_ADDRESS, RTC_SEC, 0b10000000) # enable ST (start oscillator) bit
 
-    
-def readADC(channel):
+    #SYS TIME CONFIG
+    global SYS_TIME_REF; SYS_TIME_REF = time.time()
+    print(SYS_TIME_REF);
+
+
+def readADC(channel): #Channels: 1 = pot (humidity), 2 = LDR, 3 = temperature
     spi = spidev.SpiDev() #Enable SPI                                                                                                        
     spi.open(SPI_BUS, SPI_DEVICE) #Open connection to a specific bus and device (CS pin)                                                                                                                  
     spi.max_speed_hz = SPI_MAX_SPEED
@@ -92,9 +107,13 @@ def readADC(channel):
     return adc
 
 def readRTC():
-    sec = RTC.read_byte_data(RTC_ADDRESS, RTC_SEC) - 128 #first bit is oscilator bit, must remove to get seconds value
-    minute = RTC.read_byte_data(RTC_ADDRESS, RTC_MIN)
-    hour = RTC.read_byte_data(RTC_ADDRESS, RTC_HOUR)
+    sec_byte = RTC.read_byte_data(RTC_ADDRESS, RTC_SEC) - 128 #first bit is oscilator bit, must remove to get seconds value
+    sec = int(((sec_byte&0b01110000)>>4)*10) + int(sec_byte&(0b00001111)) # convert to right format
+    minute_byte = RTC.read_byte_data(RTC_ADDRESS, RTC_MIN)
+    minute = int(((minute_byte&0b01110000)>>4)*10) + int(minute_byte&(0b00001111)) # convert to right format
+    hour_byte = RTC.read_byte_data(RTC_ADDRESS, RTC_HOUR)
+    hour = int(((hour_byte&0b00010000)>>4)*10) + int(hour_byte&(0b00001111)) # convert to right format
+    #return time.strptime(f"{hour:02}:{minute:02}:{sec:02}","%H:%M:%S")
     return f"{hour:02}:{minute:02}:{sec:02}"
 
     
@@ -107,12 +126,12 @@ def triggerAlarm():
     PWM.start(50)
     ALARM_TRIGGERED = True
 
-def displayInfo(time, humidity, light, DACout):
+def displayInfo(RTCtime,systime, humidity,temp, light, DACout):
     global ALARM_TRIGGERED;
     alarmStr = ""
     if(ALARM_TRIGGERED):
         alarmStr = "(*)"
-    print(f"{time:10} {humidity:8}V {light:8} {DACout:8}V {alarmStr:5}")
+    print(f"{RTCtime:10} {systime:10} {humidity:8}V {temp:8} C {light:8} {DACout:8}V {alarmStr:5}")
     
 
 def startStopMonitoring(pos):
@@ -125,7 +144,7 @@ def dismissAlarm(pos):
     ALARM_TRIGGERED = False
 
 def resetSysTime(pos):
-    RTC.write_byte_data(RTC_ADDRESS, RTC_SEC, 0b10000000)
+    RTC.write_byte_data(RTC_ADDRESS, RTC_SEC, 0b10000000)  #ensure enable clock bit is set
     RTC.write_byte_data(RTC_ADDRESS, RTC_MIN, 0b00000000)
     RTC.write_byte_data(RTC_ADDRESS, RTC_HOUR, 0b00000000)
 
@@ -144,14 +163,19 @@ def main():
     global IS_MONITORING
     if(IS_MONITORING): #only read values if currently monitoring
         humidityReading = readADC(0);
-        humidityVoltage = round(humidityReading*VREF/(2**ADC_RESOLUTION),3); #convert humidity reading to voltage 
+        humidityVoltage = round(humidityReading*VREF/(2**ADC_RESOLUTION),1); #convert humidity reading to voltage 
         lightReading = readADC(1);
-        timeReading = readRTC();
+        tempReading = readADC(2);
+        tempVoltage = round(tempReading*VREF/(2**ADC_RESOLUTION),3); #convert temperature reading to voltage
+        ambientTemp = round((tempVoltage-TEMP_0)/(TEMP_COEFFICIENT),3)
+        #print(tempReading, tempVoltage, ambientTemp)
+        RTCtimeReading = readRTC();
+        #systime = time.mktime(RTCtimeReading) - SYS_TIME_REF #calculate current system time based on current RTC time and last reset of sys time
+        systime = "00:00:00"
         DACout = round((lightReading/(2**ADC_RESOLUTION)) *  humidityVoltage,3)
         if(DACout<0.65 or DACout>2.65):
             triggerAlarm()
-        displayInfo(timeReading, humidityVoltage, lightReading, DACout);
-        
+        displayInfo(RTCtimeReading,systime, humidityVoltage, ambientTemp, lightReading, DACout);
     time.sleep(READ_INTERVAL)
 
     
@@ -160,7 +184,7 @@ if __name__ == "__main__":
     # Make sure the GPIO is stopped correctly
     try:
         config()
-        print(f"{'RTC time':<10} {'Humidity':>8} {'Light':>8} {'DAC out':>8} {'Alarm':>5}")
+        print(f"{'RTC time':<10} {'sys time':<10} {'Humidity':>8} {'Temp':>8} {'Light':>8} {'DAC out':>8} {'Alarm':>5}")
         while True:
             main()
     except KeyboardInterrupt:
