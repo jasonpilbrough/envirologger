@@ -169,9 +169,10 @@ def displayInfo(RTCtime,systime, humidity,temp, light, DACout):
     alarmStr = ""
     if(ALARM_TRIGGERED):
         alarmStr = "(*)"
-    print(f"{RTCtime:10} {systime:10} {humidity:8}V {temp:8} C {light:8} {DACout:8}V {alarmStr:>6}")
-    temp = str(RTCtime) +" " +str(systime) +" " +str(humidity) +"V " +str(temp) +"C " +str(light) +" " +str(DACout) +"\n"
-    blynk.virtual_write(terminal, temp)
+    strToPrint = f"{RTCtime:10} {systime:10} {humidity:8}V {temp:8} C {light:8} {DACout:8}V {alarmStr:>6}"
+    print(strToPrint)
+    toBlynk = str(RTCtime) +"  " +str(systime) +"  " +str(humidity) +"V  " +str(temp) +"C   " +str(light) +"   " +str(DACout) + "  " + alarmStr +"\n"
+    blynk.virtual_write(terminal, toBlynk)
 
 def startStopMonitoring(pos):
     global IS_MONITORING
@@ -265,7 +266,11 @@ if __name__ == "__main__":
     try:
         config()
         #setRTCtime(2,51,30)
+
+        #write headings
         print(f"{'RTC Time':<10} {'Sys Time':<10} {'Humidity':>9} {'Temp':>10} {'Light':>8} {'DAC out':>9} {'Alarm':>6}")
+        toBlynk = "RTC Time  Sys Time  Hum  Temp Light  Vout  Alarm\n"
+        blynk.virtual_write(terminal, toBlynk)
         while True:
             main()
     except KeyboardInterrupt:
