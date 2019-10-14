@@ -12,7 +12,6 @@ import time
 from datetime import datetime
 import spidev
 import smbus
-import blynklib
 
 #GLOBAL VARIABLES
 
@@ -63,25 +62,15 @@ global TEMP_COEFFICIENT; TEMP_COEFFICIENT = 0.01   #temperature sensor coefficen
 #SYSTEM TIME
 global SYS_TIME_REF; SYS_TIME_REF = 0              #time in millis of last system reset
 
-# BLYNK VIRTUAL PINS
-global virtTemp;virtTemp = 1
-global virtHum; virtHum = 2
-global virtLight; virtLight = 3
-global virtTime; virtTime = 4
-global virtAlarm; virtAlarm = 7
-global virtVolt; virtVolt = 5
-global virtSlide; virtSlide = 6
-global terminal; terminal = 0;
 
-
-#INITIALISE BLYNK COMMUNICATION CHANNEL
-BLYNK_AUTH = 'mXqD_hyad0IgtjuXt0r7We_y7JaTxIEh'
-blynk = blynklib.Blynk(BLYNK_AUTH)
 
 #CONFIG GPIO PINS (ONLY RUNS ONCE)
 def config():
     GPIO.setmode(GPIO.BOARD)
     
+    #CONFIG OUTPUT PINS AND PWM
+    GPIO.setup(PWM_OUT, GPIO.OUT) #setup PWM output pin
+    global PWM; PWM = GPIO.PWM(PWM_OUT, PWM_FREQ)
     
     #CONFIG INPUT PINS
     GPIO.setup(BUTTON1, GPIO.IN, pull_up_down=GPIO.PUD_DOWN) #config with pull down resistor
@@ -103,16 +92,8 @@ def config():
 
     #CONFIG SYS TIME AT BOOT 
     global SYS_TIME_REF; SYS_TIME_REF = time.time()
-    blynk.run() #needs to run once before clear command can be run
-    blynk.virtual_write(terminal, "clr") #clear blynk terminal on boot
-    blynk.virtual_write(virtSlide, 1) #set readInterval in Blynk app to 1 by default
 
-    #CONFIG OUTPUT PINS AND PWM                                                                                                                                                                            
-    GPIO.setup(PWM_OUT, GPIO.OUT) #setup PWM output pin                                                                                                                                                    
-    global PWM; PWM = GPIO.PWM(PWM_OUT, PWM_FREQ)
-    GPIO.output(PWM_OUT, GPIO.LOW) #set alarm pin initially low
-    
-    
+
 def readADC(channel): #Channels: 1 = pot (humidity), 2 = LDR, 3 = temperature
     spi = spidev.SpiDev() #Enable
     spi.open(SPI_BUS, SPI_DEVICE_ADC) #Open connection to a specific bus and device (CS pin)                                                                                                                  
@@ -170,8 +151,7 @@ def displayInfo(RTCtime,systime, humidity,temp, light, DACout):
     if(ALARM_TRIGGERED):
         alarmStr = "(*)"
     print(f"{RTCtime:10} {systime:10} {humidity:8}V {temp:8} C {light:8} {DACout:8}V {alarmStr:>6}")
-    temp = str(RTCtime) +" " +str(systime) +" " +str(humidity) +"V " +str(temp) +"C " +str(light) +" " +str(DACout) +"\n"
-    blynk.virtual_write(terminal, temp)
+    
 
 def startStopMonitoring(pos):
     global IS_MONITORING
@@ -180,14 +160,12 @@ def startStopMonitoring(pos):
 def dismissAlarm(pos):
     global ALARM_TRIGGERED
     PWM.stop()
-    blynk.virtual_write(virtAlarm, 0)
     ALARM_TRIGGERED = False
     print("Alarm Dismissed")
 
 def resetSysTime(pos):
     global SYS_TIME_REF; SYS_TIME_REF = time.time() #update reference used to calculate sys time from RTC time
-    blynk.virtual_write(terminal, "clr")
-    
+
 def setRTCtime(hour, min, sec):
     secBits = 0b10000000 | sec % 10 | (sec // 10)<<4
     minBits = min % 10 | (min // 10)<<4
@@ -199,7 +177,6 @@ def setRTCtime(hour, min, sec):
 #TOGGLE READ INTERVAL BETWEEN 1s, 2s, and 5s
 def changeReadInteval(pos): 
     global READ_INTERVAL
-    #READ_INTERVAL = (READ_INTERVAL +1)%5
     if(READ_INTERVAL==1):
         READ_INTERVAL=2
     elif(READ_INTERVAL==2):
@@ -207,51 +184,28 @@ def changeReadInteval(pos):
     elif(READ_INTERVAL==5):
         READ_INTERVAL=1
 
-    valueToWrite = READ_INTERVAL
-    if(valueToWrite==5):
-        valueToWrite=3
-        
-    blynk.virtual_write(virtSlide, valueToWrite)
-		
-@blynk.handle_event('write V6')
-def read_virtual_pin_handler(pin, value):
-    global READ_INTERVAL
-    temp = int( value[0])
-    if(temp==3):
-        temp = 5
-
-    READ_INTERVAL = int(temp)
-
 def main():
     global IS_MONITORING
     if(IS_MONITORING): #only read values if currently monitoring
-        blynk.run() #initialise blynk monitor
         humidityReading = readADC(0);
         humidityVoltage = round(humidityReading*VREF/(2**ADC_RESOLUTION),1); #convert humidity reading to voltage 
-        blynk.virtual_write(virtHum, humidityVoltage)
         lightReading = readADC(1);
-        blynk.virtual_write(virtLight, lightReading)
         tempReading = readADC(2);
         tempVoltage = round(tempReading*VREF/(2**ADC_RESOLUTION),3); #convert temperature reading to voltage
         ambientTemp = round((tempVoltage-TEMP_0)/(TEMP_COEFFICIENT))
-        blynk.virtual_write(virtTemp, ambientTemp)
-        
+
         #Calculate systime by subtracting system time ref from RTC time
         RTCtimeReading = readRTC();
         time.strptime(RTCtimeReading, "%H:%M:%S")
         timeDiff = time.time()-SYS_TIME_REF
-        
         systime = time.strftime("%H:%M:%S", time.gmtime(timeDiff))
-        blynk.virtual_write(virtTime, systime)
-
-        DACout = round((lightReading/(2**DAC_RESOLUTION)) *  humidityVoltage,3) 
-        blynk.virtual_write(virtVolt, DACout)
+        
+        DACout = round((lightReading/(2**DAC_RESOLUTION)) *  humidityVoltage,3)
         writeDAC(DACout)
 
         global LAST_ALARM_TIME
         if((DACout<0.65 or DACout>2.65) and ((time.time() - LAST_ALARM_TIME) > 180)): # DAC value outside range and no alarm in last 180 seconds
             triggerAlarm()
-            blynk.virtual_write(virtAlarm, 255)
             LAST_ALARM_TIME = time.time() # update time of last alarm to current time
             
         displayInfo(RTCtimeReading,systime, humidityVoltage, ambientTemp, lightReading, DACout);
